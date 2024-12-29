@@ -1,3 +1,4 @@
+use std::time::{SystemTime, UNIX_EPOCH};
 use {
     crate::{
         cluster_nodes::{self, check_feature_activation, ClusterNodesCache},
@@ -140,25 +141,28 @@ fn run_shred_sigverify<const K: usize>(
     let mut packets: Vec<_> = std::iter::once(packets)
         .chain(shred_fetch_receiver.try_iter())
         .collect();
+    verified_sender.send(packets)?;
     let now = Instant::now();
-    stats.num_iters += 1;
-    stats.num_batches += packets.len();
-    stats.num_packets += packets.iter().map(PacketBatch::len).sum::<usize>();
-    stats.num_discards_pre += count_discards(&packets);
-    stats.num_duplicates += thread_pool.install(|| {
-        packets
-            .par_iter_mut()
-            .flatten()
-            .filter(|packet| {
-                !packet.meta().discard()
-                    && packet
-                        .data(..)
-                        .map(|data| deduper.dedup(data))
-                        .unwrap_or(true)
-            })
-            .map(|packet| packet.meta_mut().set_discard(true))
-            .count()
-    });
+    // stats.num_iters += 1;
+    // stats.num_batches += packets.len();
+    // stats.num_packets += packets.iter().map(PacketBatch::len).sum::<usize>();
+    // stats.num_discards_pre += count_discards(&packets);
+    // stats.num_duplicates += thread_pool.install(|| {
+    //     packets
+    //         .par_iter_mut()
+    //         .flatten()
+    //         .filter(|packet| {
+    //             !packet.meta().discard()
+    //                 && packet
+    //                     .data(..)
+    //                     .map(|data| deduper.dedup(data))
+    //                     .unwrap_or(true)
+    //         })
+    //         .map(|packet| {
+    //             packet.meta_mut().set_discard(true)
+    //         })
+    //         .count()
+    // });
     let (working_bank, root_bank) = {
         let bank_forks = bank_forks.read().unwrap();
         (bank_forks.working_bank(), bank_forks.root_bank())
@@ -172,7 +176,7 @@ fn run_shred_sigverify<const K: usize>(
         &mut packets,
         cache,
     );
-    stats.num_discards_post += count_discards(&packets);
+    // stats.num_discards_post += count_discards(&packets);
     // Verify retransmitter's signature, and resign shreds
     // Merkle root as the retransmitter node.
     let resign_start = Instant::now();
@@ -239,7 +243,6 @@ fn run_shred_sigverify<const K: usize>(
         .collect();
     stats.num_retransmit_shreds += shreds.len();
     retransmit_sender.send(shreds)?;
-    verified_sender.send(packets)?;
     stats.elapsed_micros += now.elapsed().as_micros() as u64;
     Ok(())
 }
@@ -340,8 +343,8 @@ fn get_slot_leaders(
                         .filter(|leader| leader != self_pubkey)
                 })
                 .is_none()
-        })
-        .for_each(|packet| packet.meta_mut().set_discard(true));
+        }).for_each(|_packet| {});
+        // .for_each(|packet| packet.meta_mut().set_discard(true));
     leaders
 }
 

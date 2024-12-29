@@ -50,6 +50,24 @@ enum Output {
 }
 
 fn main() {
+    // let _logger = flexi_logger::Logger::try_with_env_or_str("info")
+    //     .unwrap()
+    //     .log_to_file(
+    //         flexi_logger::FileSpec::default()
+    //             .directory("my_logs")
+    //     )
+    //     .append()
+    //     .write_mode(flexi_logger::WriteMode::BufferAndFlush)
+    //     .print_message()
+    //     .create_symlink("current_run")
+    //     .rotate(
+    //         flexi_logger::Criterion::Size(10 * 1024 * 1024), // 10 MB
+    //         flexi_logger::Naming::Numbers,
+    //         flexi_logger::Cleanup::KeepLogFiles(5),
+    //     )
+    //     .start()
+    //     .unwrap();
+
     let default_args = cli::DefaultTestArgs::new();
     let version = solana_version::version!();
     let matches = cli::test_app(version, &default_args).get_matches();
@@ -578,7 +596,7 @@ fn main() {
     ) {
         Ok(test_validator) => {
             if let Some(dashboard) = dashboard {
-                dashboard.run(Duration::from_millis(250));
+                // dashboard.run(Duration::from_millis(250));
             }
             test_validator.join();
         }

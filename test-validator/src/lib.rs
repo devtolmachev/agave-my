@@ -168,7 +168,7 @@ impl Default for TestValidatorGenesis {
             compute_unit_limit: Option::<u64>::default(),
             log_messages_bytes_limit: Option::<usize>::default(),
             transaction_account_lock_limit: Option::<usize>::default(),
-            tpu_enable_udp: DEFAULT_TPU_ENABLE_UDP,
+            tpu_enable_udp: true,  // DEFAULT_TPU_ENABLE_UDP,
             geyser_plugin_manager: Arc::new(RwLock::new(GeyserPluginManager::new())),
             admin_rpc_service_post_init:
                 Arc::<RwLock<Option<AdminRpcRequestMetadataPostInit>>>::default(),
@@ -1027,12 +1027,13 @@ impl TestValidator {
             staked_nodes_overrides: config.staked_nodes_overrides.clone(),
             accounts_db_config,
             runtime_config,
+            voting_disabled: true,
             ..ValidatorConfig::default_for_test()
         };
         if let Some(ref tower_storage) = config.tower_storage {
             validator_config.tower_storage = tower_storage.clone();
         }
-
+        println!("tvu node socket {:?}", node.sockets.tvu);
         let validator = Some(Validator::new(
             node,
             Arc::new(validator_identity),
@@ -1045,7 +1046,7 @@ impl TestValidator {
             rpc_to_plugin_manager_receiver,
             config.start_progress.clone(),
             socket_addr_space,
-            DEFAULT_TPU_USE_QUIC,
+            false,  // DEFAULT_TPU_USE_QUIC,
             DEFAULT_TPU_CONNECTION_POOL_SIZE,
             config.tpu_enable_udp,
             32, // max connections per IpAddr per minute for test

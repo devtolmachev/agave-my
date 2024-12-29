@@ -15,28 +15,14 @@ use {
             },
         },
         result::{Error, Result},
-    },
-    bytes::Bytes,
-    crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender},
-    rayon::{prelude::*, ThreadPool},
-    solana_feature_set as feature_set,
-    solana_gossip::cluster_info::ClusterInfo,
-    solana_ledger::{
+    }, bytes::Bytes, crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender}, rayon::{prelude::*, ThreadPool}, solana_entry::entry::Entry, solana_feature_set as feature_set, solana_gossip::cluster_info::ClusterInfo, solana_ledger::{
         blockstore::{Blockstore, BlockstoreInsertionMetrics, PossibleDuplicateShred},
         leader_schedule_cache::LeaderScheduleCache,
-        shred::{self, Nonce, ReedSolomonCache, Shred},
-    },
-    solana_measure::measure::Measure,
-    solana_metrics::inc_new_counter_error,
-    solana_perf::packet::{Packet, PacketBatch},
-    solana_rayon_threadlimit::get_thread_count,
-    solana_runtime::bank_forks::BankForks,
-    solana_sdk::{
+        shred::{self, Nonce, ReedSolomonCache, Shred, Shredder},
+    }, solana_measure::measure::Measure, solana_metrics::inc_new_counter_error, solana_perf::packet::{Packet, PacketBatch}, solana_rayon_threadlimit::get_thread_count, solana_runtime::bank_forks::BankForks, solana_sdk::{
         clock::{Slot, DEFAULT_MS_PER_SLOT},
         pubkey::Pubkey,
-    },
-    solana_turbine::cluster_nodes,
-    std::{
+    }, solana_turbine::cluster_nodes, std::{
         cmp::Reverse,
         collections::{HashMap, HashSet},
         net::{SocketAddr, UdpSocket},
@@ -46,8 +32,7 @@ use {
         },
         thread::{self, Builder, JoinHandle},
         time::{Duration, Instant},
-    },
-    tokio::sync::mpsc::Sender as AsyncSender,
+    }, tokio::sync::mpsc::Sender as AsyncSender
 };
 
 type ShredPayload = Vec<u8>;
@@ -290,9 +275,9 @@ where
     let mut shred_receiver_elapsed = Measure::start("shred_receiver_elapsed");
     let mut packets = verified_receiver.recv_timeout(RECV_TIMEOUT)?;
     packets.extend(verified_receiver.try_iter().flatten());
-    shred_receiver_elapsed.stop();
-    ws_metrics.shred_receiver_elapsed_us += shred_receiver_elapsed.as_us();
-    ws_metrics.run_insert_count += 1;
+    // shred_receiver_elapsed.stop();
+    // ws_metrics.shred_receiver_elapsed_us += shred_receiver_elapsed.as_us();
+    // ws_metrics.run_insert_count += 1;
     let handle_packet = |packet: &Packet| {
         if packet.meta().discard() {
             return None;
@@ -316,10 +301,29 @@ where
             .flat_map_iter(|packets| packets.iter().filter_map(handle_packet))
             .unzip()
     });
-    ws_metrics.handle_packets_elapsed_us += now.elapsed().as_micros() as u64;
-    ws_metrics.num_packets += packets.iter().map(PacketBatch::len).sum::<usize>();
-    ws_metrics.num_repairs += repair_infos.iter().filter(|r| r.is_some()).count();
-    ws_metrics.num_shreds_received += shreds.len();
+
+    let repairs: Vec<_> = repair_infos
+        .iter()
+        .map(|repair_info| repair_info.is_some())
+        .collect();
+    // prune_shreds_elapsed.stop();
+    // ws_metrics.prune_shreds_elapsed_us += prune_shreds_elapsed.as_us();
+
+    let completed_data_sets = blockstore.insert_shreds_handle_duplicate(
+        shreds.clone(),
+        repairs,
+        Some(leader_schedule_cache),
+        false, // is_trusted
+        Some(retransmit_sender),
+        &handle_duplicate,
+        reed_solomon_cache,
+        metrics,
+    )?;
+
+    // ws_metrics.handle_packets_elapsed_us += now.elapsed().as_micros() as u64;
+    // ws_metrics.num_packets += packets.iter().map(PacketBatch::len).sum::<usize>();
+    // ws_metrics.num_repairs += repair_infos.iter().filter(|r| r.is_some()).count();
+    // ws_metrics.num_shreds_received += shreds.len();
     for packet in packets.iter().flat_map(PacketBatch::iter) {
         let addr = packet.meta().socket_addr();
         *ws_metrics.addrs.entry(addr).or_default() += 1;
@@ -334,24 +338,7 @@ where
         accept_repairs_only,
     );
     ws_metrics.num_shreds_pruned_invalid_repair = num_shreds - shreds.len();
-    let repairs: Vec<_> = repair_infos
-        .iter()
-        .map(|repair_info| repair_info.is_some())
-        .collect();
-    prune_shreds_elapsed.stop();
-    ws_metrics.prune_shreds_elapsed_us += prune_shreds_elapsed.as_us();
-
-    let completed_data_sets = blockstore.insert_shreds_handle_duplicate(
-        shreds,
-        repairs,
-        Some(leader_schedule_cache),
-        false, // is_trusted
-        Some(retransmit_sender),
-        &handle_duplicate,
-        reed_solomon_cache,
-        metrics,
-    )?;
-
+    // println!("completed_data_sets_sender some: {:?}", completed_data_sets_sender.is_some());
     if let Some(sender) = completed_data_sets_sender {
         sender.try_send(completed_data_sets)?;
     }

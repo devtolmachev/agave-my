@@ -82,6 +82,9 @@ impl ShredFetchStage {
             root_bank.cluster_type()
         };
 
+        use chrono::prelude::*;
+        use log::*;
+
         for mut packet_batch in recvr {
             if last_updated.elapsed().as_millis() as u64 > DEFAULT_MS_PER_SLOT {
                 last_updated = Instant::now();
@@ -140,7 +143,15 @@ impl ShredFetchStage {
                     packet.meta_mut().set_discard(true);
                 } else {
                     packet.meta_mut().flags.insert(flags);
-                }
+                };
+
+                // if std::thread::current().name() == Some("solTvuPktMod") {
+                //     let log_msg = format!(
+                //         "modify_packets(). packet data - {:?}. time - {:?}",
+                //         packet.data(..), Utc::now()
+                //     );
+                //     info!("{}", log_msg);
+                // }
             }
             stats.maybe_submit(name, STATS_SUBMIT_CADENCE);
             if sendr.send(packet_batch).is_err() {

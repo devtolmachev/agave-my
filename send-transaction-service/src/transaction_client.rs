@@ -107,6 +107,7 @@ where
         let mut measure = Measure::start("send-us");
         let conn = self.connection_cache.get_connection(peer);
         let result = conn.send_data_batch_async(wire_transactions);
+        println!("send transaction from rpc to addr {:?}. result - {:?}", peer, result);
 
         if let Err(err) = result {
             warn!(

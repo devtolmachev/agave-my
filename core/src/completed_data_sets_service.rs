@@ -5,19 +5,12 @@
 //! provided to the [`CompletedDataSetsService`].
 
 use {
-    crossbeam_channel::{Receiver, RecvTimeoutError, Sender},
-    solana_entry::entry::Entry,
-    solana_ledger::blockstore::{Blockstore, CompletedDataSetInfo},
-    solana_rpc::{max_slots::MaxSlots, rpc_subscriptions::RpcSubscriptions},
-    solana_sdk::signature::Signature,
-    std::{
-        sync::{
+    crossbeam_channel::{Receiver, RecvTimeoutError, Sender}, serde_json::{from_str, json, Value}, solana_entry::entry::Entry, solana_ledger::blockstore::{Blockstore, CompletedDataSetInfo}, solana_rpc::{max_slots::MaxSlots, rpc_subscriptions::RpcSubscriptions}, solana_sdk::{signature::Signature, transaction::VersionedTransaction}, std::{
+        fs::{self, OpenOptions}, io::Write, sync::{
             atomic::{AtomicBool, Ordering},
             Arc,
-        },
-        thread::{self, Builder, JoinHandle},
-        time::Duration,
-    },
+        }, thread::{self, Builder, JoinHandle}, time::{Duration, SystemTime, UNIX_EPOCH}
+    }
 };
 
 pub type CompletedDataSetsReceiver = Receiver<Vec<CompletedDataSetInfo>>;
@@ -76,10 +69,39 @@ impl CompletedDataSetsService {
                 end_index,
             } = completed_set_info;
             max_slot = max_slot.max(slot);
+
+            fn add_array_to_json(file_path: &str, new_array: Vec<Value>) -> std::io::Result<()> {
+                // Читаем существующий файл
+                let mut data = fs::read_to_string(file_path)?;
+                let mut json_data = from_str(&data).unwrap_or(json!([]));
+            
+                // Добавляем новый массив
+                if let Some(arr) = json_data.as_array_mut() {
+                    arr.extend(new_array);
+                }
+            
+                // Записываем обратно в файл
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(file_path)?;
+                file.write_all(serde_json::to_string(&json_data)?.as_bytes())?;
+            
+                Ok(())
+            }
+
             match blockstore.get_entries_in_data_block(slot, start_index, end_index, None) {
                 Ok(entries) => {
-                    let transactions = Self::get_transaction_signatures(entries);
+                    let transactions = Self::get_transaction_signatures(entries.clone());
                     if !transactions.is_empty() {
+                        let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros();
+                        let ts = chrono::Utc::now();
+                        let value: Vec<Value> = entries
+                            .iter()
+                            .flat_map(|x| x.clone().transactions) // Извлекаем все транзакции
+                            .map(|tx| json!({"tx": format!("{:?}", tx), "ts": ts})) // Преобразуем каждую транзакцию в Value
+                            .collect();
+                        info!("completed data sets service - {:?}", value);
                         rpc_subscriptions.notify_signatures_received((slot, transactions));
                     }
                 }

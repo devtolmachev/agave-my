@@ -20,13 +20,14 @@ chrono-humanize = { workspace = true }
 crossbeam-channel = { workspace = true }
 dashmap = { workspace = true, features = ["rayon", "raw-api"] }
 eager = { workspace = true }
+flexi_logger = "0.29.8"
 fs_extra = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
 lazy-lru = { workspace = true }
 lazy_static = { workspace = true }
 libc = { workspace = true }
-log = { workspace = true }
+log.workspace = true
 lru = { workspace = true }
 mockall = { workspace = true }
 num_cpus = { workspace = true }

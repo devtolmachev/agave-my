@@ -1182,10 +1182,10 @@ pub fn should_discard_shred(
             return true;
         }
         Some(version) => {
-            if version != shred_version {
-                stats.shred_version_mismatch += 1;
-                return true;
-            }
+            // if version != shred_version {
+            //     stats.shred_version_mismatch += 1;
+            //     return true;
+            // }
         }
     }
     let Ok(shred_variant) = layout::get_shred_variant(shred) else {
@@ -1194,10 +1194,10 @@ pub fn should_discard_shred(
     };
     let slot = match layout::get_slot(shred) {
         Some(slot) => {
-            if slot > max_slot {
-                stats.slot_out_of_range += 1;
-                return true;
-            }
+            // if slot > max_slot {
+            //     stats.slot_out_of_range += 1;
+            //     return true;
+            // }
             slot
         }
         None => {

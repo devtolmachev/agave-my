@@ -469,6 +469,17 @@ pub fn broadcast_shreds(
                             Protocol::UDP => Either::Left,
                         })((shred.payload(), addr))
                     })
+                // let socket = SocketAddr::new(
+                //     std::net::IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 
+                //     1025
+                // );
+                // Some(socket)
+                // .map(|addr| {
+                //     (match protocol {
+                //         Protocol::QUIC => Either::Right,
+                //         Protocol::UDP => Either::Left,
+                //     })((shred.payload(), addr))
+                // })
             })
         })
         .partition_map(std::convert::identity);
