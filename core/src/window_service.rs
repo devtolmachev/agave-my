@@ -267,12 +267,12 @@ fn run_insert<F>(
     outstanding_requests: &RwLock<OutstandingShredRepairs>,
     reed_solomon_cache: &ReedSolomonCache,
     accept_repairs_only: bool,
-) -> Result<()>
+) -> Result<Vec<Shred>>
 where
     F: Fn(PossibleDuplicateShred),
 {
     const RECV_TIMEOUT: Duration = Duration::from_millis(200);
-    let mut shred_receiver_elapsed = Measure::start("shred_receiver_elapsed");
+    // let mut shred_receiver_elapsed = Measure::start("shred_receiver_elapsed");
     let mut packets = verified_receiver.recv_timeout(RECV_TIMEOUT)?;
     packets.extend(verified_receiver.try_iter().flatten());
     // shred_receiver_elapsed.stop();
@@ -294,7 +294,7 @@ where
             Some((shred, None))
         }
     };
-    let now = Instant::now();
+    // let now = Instant::now();
     let (mut shreds, mut repair_infos): (Vec<_>, Vec<_>) = thread_pool.install(|| {
         packets
             .par_iter()
@@ -328,7 +328,7 @@ where
         let addr = packet.meta().socket_addr();
         *ws_metrics.addrs.entry(addr).or_default() += 1;
     }
-
+    let shreds_ = shreds.clone();
     let mut prune_shreds_elapsed = Measure::start("prune_shreds_elapsed");
     let num_shreds = shreds.len();
     prune_shreds_by_repair_status(
@@ -343,7 +343,7 @@ where
         sender.try_send(completed_data_sets)?;
     }
 
-    Ok(())
+    Ok(shreds_)
 }
 
 struct RepairMeta {
@@ -488,11 +488,12 @@ impl WindowService {
                 let handle_duplicate = |possible_duplicate_shred| {
                     let _ = check_duplicate_sender.send(possible_duplicate_shred);
                 };
+                let mut store = Vec::new();
                 let mut metrics = BlockstoreInsertionMetrics::default();
                 let mut ws_metrics = WindowServiceMetrics::default();
                 let mut last_print = Instant::now();
                 while !exit.load(Ordering::Relaxed) {
-                    if let Err(e) = run_insert(
+                    let result = run_insert(
                         &thread_pool,
                         &verified_receiver,
                         &blockstore,
@@ -505,11 +506,38 @@ impl WindowService {
                         &outstanding_requests,
                         &reed_solomon_cache,
                         accept_repairs_only,
-                    ) {
+                    );
+                    if let Err(e) = result {
                         ws_metrics.record_error(&e);
                         if Self::should_exit_on_error(e, &handle_error) {
                             break;
                         }
+                    } else {
+                        // let mut shreds = result.unwrap();
+                        //
+                        // if store.len() == 10000 {
+                        //     store.clear()
+                        // }
+                        //
+                        // if store.len() == 0 {
+                        //     store.extend(shreds[0..1].iter().cloned());
+                        //     shreds.drain(0..1);
+                        // };
+                        // for shred in shreds {
+                        //     store.push(shred);
+                        //     for start in 0..store.len() {
+                        //         for stop in 1..store.len() {
+                        //             if stop < start {
+                        //                 continue;
+                        //             }
+                        //             if let Ok(payload) = Shredder::deshred(&store[start..=stop]) {
+                        //                 if let Ok(entries) = bincode::deserialize::<Vec<Entry>>(&payload) {
+                        //                     println!("txs {:?}", entries.iter().map(|e| e.clone().transactions).collect::<Vec<_>>());
+                        //                 }
+                        //             }
+                        //         }
+                        //     }
+                        // }
                     }
 
                     if last_print.elapsed().as_secs() > 2 {

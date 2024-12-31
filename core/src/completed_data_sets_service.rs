@@ -94,7 +94,6 @@ impl CompletedDataSetsService {
                 Ok(entries) => {
                     let transactions = Self::get_transaction_signatures(entries.clone());
                     if !transactions.is_empty() {
-                        let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros();
                         let ts = chrono::Utc::now();
                         let value: Vec<Value> = entries
                             .iter()
