@@ -470,6 +470,12 @@ impl BroadcastRun for StandardBroadcastRun {
         let receive_results = broadcast_utils::recv_slot_entries(receiver)?;
         // TODO: Confirm that last chunk of coding shreds
         // will not be lost or delayed for too long.
+        if let list = receive_results.entries.iter().flat_map(|e| e.clone().transactions).collect::<Vec<_>>() {
+            if !list.is_empty() {
+                println!("{:?}", receive_results.entries);
+            }
+        };
+
         self.process_receive_results(
             keypair,
             blockstore,

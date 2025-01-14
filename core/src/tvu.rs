@@ -238,7 +238,8 @@ impl Tvu {
                 cluster_slots: cluster_slots.clone(),
                 wen_restart_repair_slots,
             };
-            WindowService::new(
+            WindowService::
+            new(
                 blockstore.clone(),
                 verified_receiver,
                 retransmit_sender,

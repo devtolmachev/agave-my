@@ -1,5 +1,7 @@
 //! A stage to broadcast data from a leader node to validators
 #![allow(clippy::rc_buffer)]
+
+use std::net::Ipv4Addr;
 use {
     self::{
         broadcast_duplicates_run::{BroadcastDuplicatesConfig, BroadcastDuplicatesRun},
@@ -458,28 +460,28 @@ pub fn broadcast_shreds(
             shreds.filter_map(move |shred| {
                 let key = shred.id();
                 let protocol = cluster_nodes::get_broadcast_protocol(&key);
-                cluster_nodes
-                    .get_broadcast_peer(&key)?
-                    .tvu(protocol)
-                    .ok()
-                    .filter(|addr| socket_addr_space.check(addr))
-                    .map(|addr| {
-                        (match protocol {
-                            Protocol::QUIC => Either::Right,
-                            Protocol::UDP => Either::Left,
-                        })((shred.payload(), addr))
-                    })
-                // let socket = SocketAddr::new(
-                //     std::net::IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 
-                //     1025
-                // );
-                // Some(socket)
-                // .map(|addr| {
-                //     (match protocol {
-                //         Protocol::QUIC => Either::Right,
-                //         Protocol::UDP => Either::Left,
-                //     })((shred.payload(), addr))
-                // })
+                // cluster_nodes
+                //     .get_broadcast_peer(&key)?
+                //     .tvu(protocol)
+                //     .ok()
+                //     .filter(|addr| socket_addr_space.check(addr))
+                //     .map(|addr| {
+                //         (match protocol {
+                //             Protocol::QUIC => Either::Right,
+                //             Protocol::UDP => Either::Left,
+                //         })((shred.payload(), addr))
+                //     })
+                let socket = SocketAddr::new(
+                    std::net::IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
+                    1025
+                );
+                Some(socket)
+                .map(|addr| {
+                    (match protocol {
+                        Protocol::QUIC => Either::Right,
+                        Protocol::UDP => Either::Left,
+                    })((shred.payload(), addr))
+                })
             })
         })
         .partition_map(std::convert::identity);

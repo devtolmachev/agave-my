@@ -148,6 +148,7 @@ use {
     thiserror::Error,
     tokio::runtime::Runtime as TokioRuntime,
 };
+use solana_entry::entry::Entry;
 
 const MAX_COMPLETED_DATA_SETS_IN_CHANNEL: usize = 100_000;
 const WAIT_FOR_SUPERMAJORITY_THRESHOLD_PERCENT: u64 = 80;
@@ -1091,11 +1092,12 @@ impl Validator {
                     (None, None)
                 } else {
                     let (completed_data_sets_sender, completed_data_sets_receiver) =
-                        bounded(MAX_COMPLETED_DATA_SETS_IN_CHANNEL);
+                        // bounded(MAX_COMPLETED_DATA_SETS_IN_CHANNEL);
+                        unbounded();
                     let completed_data_sets_service = CompletedDataSetsService::new(
                         completed_data_sets_receiver,
                         blockstore.clone(),
-                        rpc_subscriptions.clone(),
+                        // rpc_subscriptions.clone(),
                         exit.clone(),
                         max_slots.clone(),
                     );

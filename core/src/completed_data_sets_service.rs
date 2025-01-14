@@ -24,7 +24,7 @@ impl CompletedDataSetsService {
     pub fn new(
         completed_sets_receiver: CompletedDataSetsReceiver,
         blockstore: Arc<Blockstore>,
-        rpc_subscriptions: Arc<RpcSubscriptions>,
+        // rpc_subscriptions: Arc<RpcSubscriptions>,
         exit: Arc<AtomicBool>,
         max_slots: Arc<MaxSlots>,
     ) -> Self {
@@ -39,7 +39,7 @@ impl CompletedDataSetsService {
                     if let Err(RecvTimeoutError::Disconnected) = Self::recv_completed_data_sets(
                         &completed_sets_receiver,
                         &blockstore,
-                        &rpc_subscriptions,
+                        // &rpc_subscriptions,
                         &max_slots,
                     ) {
                         break;
@@ -53,59 +53,40 @@ impl CompletedDataSetsService {
 
     fn recv_completed_data_sets(
         completed_sets_receiver: &CompletedDataSetsReceiver,
-        blockstore: &Blockstore,
-        rpc_subscriptions: &RpcSubscriptions,
+        blockstore: &Arc<Blockstore>,
+        // rpc_subscriptions: &RpcSubscriptions,
         max_slots: &Arc<MaxSlots>,
     ) -> Result<(), RecvTimeoutError> {
-        let completed_data_sets = completed_sets_receiver.recv_timeout(Duration::from_secs(1))?;
+        let completed_data_sets = completed_sets_receiver.recv_timeout(Duration::from_millis(100))?;
         let mut max_slot = 0;
-        for completed_set_info in std::iter::once(completed_data_sets)
-            .chain(completed_sets_receiver.try_iter())
-            .flatten()
+        for completed_set_info in completed_data_sets
         {
-            let CompletedDataSetInfo {
-                slot,
-                start_index,
-                end_index,
-            } = completed_set_info;
-            max_slot = max_slot.max(slot);
+            let arc_blockstore = Arc::clone(blockstore);
 
-            fn add_array_to_json(file_path: &str, new_array: Vec<Value>) -> std::io::Result<()> {
-                // Читаем существующий файл
-                let mut data = fs::read_to_string(file_path)?;
-                let mut json_data = from_str(&data).unwrap_or(json!([]));
-            
-                // Добавляем новый массив
-                if let Some(arr) = json_data.as_array_mut() {
-                    arr.extend(new_array);
-                }
-            
-                // Записываем обратно в файл
-                let mut file = OpenOptions::new()
-                    .write(true)
-                    .truncate(true)
-                    .open(file_path)?;
-                file.write_all(serde_json::to_string(&json_data)?.as_bytes())?;
-            
-                Ok(())
-            }
+            // std::thread::spawn(move || {
+                let CompletedDataSetInfo {
+                    slot,
+                    start_index,
+                    end_index,
+                } = completed_set_info;
+                max_slot = max_slot.max(slot);
 
-            match blockstore.get_entries_in_data_block(slot, start_index, end_index, None) {
-                Ok(entries) => {
-                    let transactions = Self::get_transaction_signatures(entries.clone());
-                    if !transactions.is_empty() {
-                        let ts = chrono::Utc::now();
-                        let value: Vec<Value> = entries
+                match arc_blockstore.get_entries_in_data_block(slot, start_index, end_index, None) {
+                    Ok(entries) => {
+                        // let transactions = Self::get_transaction_signatures(entries.clone());
+                        let value: Vec<VersionedTransaction> = entries
                             .iter()
-                            .flat_map(|x| x.clone().transactions) // Извлекаем все транзакции
-                            .map(|tx| json!({"tx": format!("{:?}", tx), "ts": ts})) // Преобразуем каждую транзакцию в Value
+                            .flat_map(|x| x.clone().transactions)
                             .collect();
-                        info!("completed data sets service - {:?}", value);
-                        rpc_subscriptions.notify_signatures_received((slot, transactions));
+                        if !value.is_empty() {
+                            let ts = chrono::Utc::now();
+                            info!("{ts} completed data sets service - {:?}", value);
+                            // rpc_subscriptions.notify_signatures_received((slot, transactions));
+                        }
                     }
+                    Err(e) => warn!("completed-data-set-service deserialize error: {:?}", e),
                 }
-                Err(e) => warn!("completed-data-set-service deserialize error: {:?}", e),
-            }
+            // });
         }
         max_slots
             .shred_insert

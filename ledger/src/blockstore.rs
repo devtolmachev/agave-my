@@ -265,6 +265,8 @@ pub struct Blockstore {
     pub lowest_cleanup_slot: RwLock<Slot>,
     pub slots_stats: SlotsStats,
     rpc_api_metrics: BlockstoreRpcApiMetrics,
+
+    completed_dataset_sender: Option<Sender<Vec<CompletedDataSetInfo>>>
 }
 
 pub struct IndexMetaWorkingSetEntry {
@@ -454,11 +456,16 @@ impl Blockstore {
             lowest_cleanup_slot: RwLock::<Slot>::default(),
             slots_stats: SlotsStats::default(),
             rpc_api_metrics: BlockstoreRpcApiMetrics::default(),
+            completed_dataset_sender: None
         };
         blockstore.cleanup_old_entries()?;
         blockstore.update_highest_primary_index_slot()?;
 
         Ok(blockstore)
+    }
+
+    pub fn setup_shreds_plugin(&mut self, sender: Sender<Vec<CompletedDataSetInfo>>) {
+        self.completed_dataset_sender = Some(sender);
     }
 
     pub fn open_with_signal(
@@ -1339,6 +1346,10 @@ impl Blockstore {
             should_signal,
             newly_completed_slots,
         );
+
+        if let Some(completed_dataset_sender) = &self.completed_dataset_sender {
+            let _ = completed_dataset_sender.try_send(shred_insertion_tracker.newly_completed_data_sets.clone());
+        }
 
         // Roll up metrics
         total_start.stop();
@@ -2305,15 +2316,6 @@ impl Blockstore {
             end_index,
         })
         .collect();
-
-        use chrono::prelude::*;
-        use log::*;
-
-        let log_msg = format!(
-            "insert_data_shred(). shred id - {:?}. shred_data - {:?}. newly_completed_data_sets - {:?}. time - {:?}",
-            shred.id(), shred.data(), newly_completed_data_sets, Utc::now()
-        );
-        info!("{}", log_msg);
 
         self.slots_stats.record_shred(
             shred.slot(),
@@ -3847,7 +3849,12 @@ impl Blockstore {
                 let range_shreds = &data_shreds[range_start_index..=range_end_index];
 
                 let last_shred = range_shreds.last().unwrap();
-                assert!(last_shred.data_complete() || last_shred.last_in_slot());
+                if !(last_shred.data_complete() || last_shred.last_in_slot()) {
+                    return Err(BlockstoreError::InvalidShredData(Box::new(bincode::ErrorKind::Custom(
+                        "could not reconstruct entries buffer from shreds:".to_string(),
+                    ))))
+                };
+                // assert!(last_shred.data_complete() || last_shred.last_in_slot());
                 trace!("{:?} data shreds in last FEC set", data_shreds.len());
 
                 Shredder::deshred(range_shreds)
@@ -3857,6 +3864,8 @@ impl Blockstore {
                         )))
                     })
                     .and_then(|payload| {
+                        let msg = format!("deshred() - shred ids - {:?}", range_shreds.iter().map(|s| s.id()).collect::<Vec<_>>());
+                        // info!("{}", msg);
                         bincode::deserialize::<Vec<Entry>>(&payload).map_err(|e| {
                             BlockstoreError::InvalidShredData(Box::new(bincode::ErrorKind::Custom(
                                 format!("could not reconstruct entries: {e:?}"),

@@ -210,7 +210,7 @@ impl TransactionRecorder {
     ) -> Result<Option<usize>> {
         // create a new channel so that there is only 1 sender and when it goes out of scope, the receiver fails
         let (result_sender, result_receiver) = bounded(1);
-        println!("{:?}", transactions);
+
         let res =
             self.record_sender
                 .send(Record::new(mixin, transactions, bank_slot, result_sender));

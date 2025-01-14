@@ -254,30 +254,27 @@ fn prune_shreds_by_repair_status(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_insert<F>(
+fn run_insert(
     thread_pool: &ThreadPool,
     verified_receiver: &Receiver<Vec<PacketBatch>>,
-    blockstore: &Blockstore,
-    leader_schedule_cache: &LeaderScheduleCache,
-    handle_duplicate: F,
-    metrics: &mut BlockstoreInsertionMetrics,
+    blockstore: &Arc<Blockstore>,
+    leader_schedule_cache: &Arc<LeaderScheduleCache>,
+    check_duplicate_sender: Sender<PossibleDuplicateShred>,
+    // metrics: &mut BlockstoreInsertionMetrics,
     ws_metrics: &mut WindowServiceMetrics,
-    completed_data_sets_sender: Option<&CompletedDataSetsSender>,
-    retransmit_sender: &Sender<Vec<ShredPayload>>,
+    completed_data_sets_sender: Option<CompletedDataSetsSender>,
+    retransmit_sender: Sender<Vec<ShredPayload>>,
     outstanding_requests: &RwLock<OutstandingShredRepairs>,
-    reed_solomon_cache: &ReedSolomonCache,
+    reed_solomon_cache: &Arc<ReedSolomonCache>,
     accept_repairs_only: bool,
-) -> Result<Vec<Shred>>
-where
-    F: Fn(PossibleDuplicateShred),
+) -> Result<()>
 {
-    const RECV_TIMEOUT: Duration = Duration::from_millis(200);
-    // let mut shred_receiver_elapsed = Measure::start("shred_receiver_elapsed");
-    let mut packets = verified_receiver.recv_timeout(RECV_TIMEOUT)?;
-    packets.extend(verified_receiver.try_iter().flatten());
-    // shred_receiver_elapsed.stop();
-    // ws_metrics.shred_receiver_elapsed_us += shred_receiver_elapsed.as_us();
-    // ws_metrics.run_insert_count += 1;
+    const RECV_TIMEOUT: Duration = Duration::from_millis(50);
+    let packets = verified_receiver.recv_timeout(RECV_TIMEOUT)?;
+    if packets.len() < 1 {
+        return Ok(())
+    }
+    
     let handle_packet = |packet: &Packet| {
         if packet.meta().discard() {
             return None;
@@ -294,8 +291,8 @@ where
             Some((shred, None))
         }
     };
-    // let now = Instant::now();
-    let (mut shreds, mut repair_infos): (Vec<_>, Vec<_>) = thread_pool.install(|| {
+    
+    let (shreds, repair_infos): (Vec<_>, Vec<_>) = thread_pool.install(|| {
         packets
             .par_iter()
             .flat_map_iter(|packets| packets.iter().filter_map(handle_packet))
@@ -306,44 +303,39 @@ where
         .iter()
         .map(|repair_info| repair_info.is_some())
         .collect();
-    // prune_shreds_elapsed.stop();
-    // ws_metrics.prune_shreds_elapsed_us += prune_shreds_elapsed.as_us();
 
-    let completed_data_sets = blockstore.insert_shreds_handle_duplicate(
-        shreds.clone(),
-        repairs,
-        Some(leader_schedule_cache),
-        false, // is_trusted
-        Some(retransmit_sender),
-        &handle_duplicate,
-        reed_solomon_cache,
-        metrics,
-    )?;
+    let arc_blockstore = Arc::clone(blockstore);
+    let arc_leader_schedule_cache = Arc::clone(leader_schedule_cache);
+    let arc_reed_solomon_cache = Arc::clone(reed_solomon_cache);
+    let arc_completed_data_sets_sender = if completed_data_sets_sender.is_some() {
+        Some(Arc::new(completed_data_sets_sender.unwrap()))
+    } else {
+        None
+    };
+    let arc_retransmit_sender = Arc::new(retransmit_sender);
 
-    // ws_metrics.handle_packets_elapsed_us += now.elapsed().as_micros() as u64;
-    // ws_metrics.num_packets += packets.iter().map(PacketBatch::len).sum::<usize>();
-    // ws_metrics.num_repairs += repair_infos.iter().filter(|r| r.is_some()).count();
-    // ws_metrics.num_shreds_received += shreds.len();
-    for packet in packets.iter().flat_map(PacketBatch::iter) {
-        let addr = packet.meta().socket_addr();
-        *ws_metrics.addrs.entry(addr).or_default() += 1;
-    }
-    let shreds_ = shreds.clone();
-    let mut prune_shreds_elapsed = Measure::start("prune_shreds_elapsed");
-    let num_shreds = shreds.len();
-    prune_shreds_by_repair_status(
-        &mut shreds,
-        &mut repair_infos,
-        outstanding_requests,
-        accept_repairs_only,
-    );
-    ws_metrics.num_shreds_pruned_invalid_repair = num_shreds - shreds.len();
-    // println!("completed_data_sets_sender some: {:?}", completed_data_sets_sender.is_some());
-    if let Some(sender) = completed_data_sets_sender {
-        sender.try_send(completed_data_sets)?;
-    }
+    std::thread::spawn(move || {
+        let handle_duplicate = |possible_duplicate_shred| {
+            let _ = check_duplicate_sender.send(possible_duplicate_shred);
+        };
+        let mut metrics = BlockstoreInsertionMetrics::default();
+        let completed_data_sets = arc_blockstore.insert_shreds_handle_duplicate(
+            shreds.clone(),
+            repairs,
+            Some(&*arc_leader_schedule_cache),
+            false, // is_trusted
+            Some(&*arc_retransmit_sender),
+            &handle_duplicate,
+            &*arc_reed_solomon_cache,
+            &mut metrics,
+        ).unwrap();
 
-    Ok(shreds_)
+        if let Some(sender) = arc_completed_data_sets_sender {
+            sender.try_send(completed_data_sets).unwrap();
+        }
+    });
+
+    Ok(())
 }
 
 struct RepairMeta {
@@ -481,72 +473,54 @@ impl WindowService {
             .thread_name(|i| format!("solWinInsert{i:02}"))
             .build()
             .unwrap();
-        let reed_solomon_cache = ReedSolomonCache::default();
+        let reed_solomon_cache = Arc::new(ReedSolomonCache::default());
         Builder::new()
             .name("solWinInsert".to_string())
             .spawn(move || {
                 let handle_duplicate = |possible_duplicate_shred| {
                     let _ = check_duplicate_sender.send(possible_duplicate_shred);
                 };
-                let mut store = Vec::new();
-                let mut metrics = BlockstoreInsertionMetrics::default();
+                // let mut store = Vec::new();
+                // let mut metrics = BlockstoreInsertionMetrics::default();
                 let mut ws_metrics = WindowServiceMetrics::default();
-                let mut last_print = Instant::now();
+                use chrono::prelude::*;
                 while !exit.load(Ordering::Relaxed) {
+                    let start = Utc::now();
+                    let cloned_duplicate_sender = check_duplicate_sender.clone();
+                    let cloned_completed_data_sets_sender = completed_data_sets_sender.clone();
                     let result = run_insert(
                         &thread_pool,
                         &verified_receiver,
                         &blockstore,
                         &leader_schedule_cache,
-                        handle_duplicate,
-                        &mut metrics,
+                        cloned_duplicate_sender,
+                        // &mut metrics,
                         &mut ws_metrics,
-                        completed_data_sets_sender.as_ref(),
-                        &retransmit_sender,
+                        cloned_completed_data_sets_sender,
+                        retransmit_sender.clone(),
                         &outstanding_requests,
                         &reed_solomon_cache,
                         accept_repairs_only,
                     );
+
+                    let delta = Utc::now() - start;
+
+                    info!("start_window_insert_thread() took {:?}", delta);
+
                     if let Err(e) = result {
                         ws_metrics.record_error(&e);
                         if Self::should_exit_on_error(e, &handle_error) {
                             break;
                         }
-                    } else {
-                        // let mut shreds = result.unwrap();
-                        //
-                        // if store.len() == 10000 {
-                        //     store.clear()
-                        // }
-                        //
-                        // if store.len() == 0 {
-                        //     store.extend(shreds[0..1].iter().cloned());
-                        //     shreds.drain(0..1);
-                        // };
-                        // for shred in shreds {
-                        //     store.push(shred);
-                        //     for start in 0..store.len() {
-                        //         for stop in 1..store.len() {
-                        //             if stop < start {
-                        //                 continue;
-                        //             }
-                        //             if let Ok(payload) = Shredder::deshred(&store[start..=stop]) {
-                        //                 if let Ok(entries) = bincode::deserialize::<Vec<Entry>>(&payload) {
-                        //                     println!("txs {:?}", entries.iter().map(|e| e.clone().transactions).collect::<Vec<_>>());
-                        //                 }
-                        //             }
-                        //         }
-                        //     }
-                        // }
                     }
 
-                    if last_print.elapsed().as_secs() > 2 {
-                        metrics.report_metrics("blockstore-insert-shreds");
-                        metrics = BlockstoreInsertionMetrics::default();
-                        ws_metrics.report_metrics("recv-window-insert-shreds");
-                        ws_metrics = WindowServiceMetrics::default();
-                        last_print = Instant::now();
-                    }
+                    // if last_print.elapsed().as_secs() > 2 {
+                    //     metrics.report_metrics("blockstore-insert-shreds");
+                    //     metrics = BlockstoreInsertionMetrics::default();
+                    //     ws_metrics.report_metrics("recv-window-insert-shreds");
+                    //     ws_metrics = WindowServiceMetrics::default();
+                    //     last_print = Instant::now();
+                    // }
                 }
             })
             .unwrap()

@@ -596,7 +596,7 @@ fn main() {
     ) {
         Ok(test_validator) => {
             if let Some(dashboard) = dashboard {
-                // dashboard.run(Duration::from_millis(250));
+                dashboard.run(Duration::from_millis(250));
             }
             test_validator.join();
         }
